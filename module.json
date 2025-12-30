@@ -1,0 +1,30 @@
+{
+  "id": "impmal-content-importer",
+  "title": "Imperium Maledictum Content importer",
+  "description": "Parser para importar contenido del sistema Imperium Maledictum",
+  "version": "1.0.2",
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13"
+  },
+  "authors": [
+    {
+      "name": "GusRPG"
+    }
+  ],
+  "relationships": {
+    "systems": [
+      {
+        "id": "impmal",
+        "type": "system"
+      }
+    ]
+  },
+  "esmodules": [
+    "scripts/impmal-parser.js"
+  ],
+  "url": "https://github.com/GusRPG/impmal-content-importer",
+  "manifest": "https://raw.githubusercontent.com/GusRPG/impmal-content-importer/main/module.json",
+  "download": "https://github.com/GusRPG/impmal-content-importer/archive/refs/heads/main.zip",
+  "bugs": "https://github.com/GusRPG/impmal-content-importer/issues"
+}
