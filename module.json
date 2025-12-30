@@ -2,7 +2,7 @@
   "id": "impmal-content-importer",
   "title": "Imperium Maledictum Content importer",
   "description": "Parser para importar contenido del sistema Imperium Maledictum",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "compatibility": {
     "minimum": "13",
     "verified": "13"
