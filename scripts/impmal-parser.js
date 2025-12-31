@@ -2698,7 +2698,7 @@ class ImperiumProgram {
             </div>
             <div class="form-group">
                 <label id="input-label">Introduce el texto:</label>
-                <textarea id="impmal-text" rows="15" style="width: 100%; font-family: monospace;" placeholder=""></textarea>
+                <textarea id="impmal-text" rows="30" style="width: 100%; font-family: monospace;" placeholder=""></textarea>
                 <small id="format-hint" style="display: block; margin-top: 5px; color: #666;"></small>
             </div>
         </form>
@@ -2775,7 +2775,11 @@ class ImperiumProgram {
                     autoCalcInitiative: html.find('#auto-calc-initiative').prop('checked')
                 };
             },
-            rejectClose: false
+            rejectClose: false,
+            options: {
+                width: 1000,
+                height: "auto"
+            }
         });
 
         if (!result || !result.text) {
