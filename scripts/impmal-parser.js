@@ -1600,6 +1600,1039 @@ class ImperiumVehicleParser {
         return paragraphs.join('');
     }
 }
+// ===================================================================
+// AUGMETIC PARSER
+// ===================================================================
+class ImperiumAugmeticParser {
+    async parseInput(text) {
+        const lines = ImperiumUtils.splitLines(text);
+        const items = [];
+        const errors = [];
+        let currentFolder = null;
+        
+        let i = 0;
+        while (i < lines.length) {
+            const line = lines[i].trim();
+            
+            // Folder marker
+            if (line.startsWith('*')) {
+                currentFolder = line.substring(1).trim();
+                i++;
+                continue;
+            }
+            
+            // Detect augmetic name (all uppercase line)
+            if (line && line === line.toUpperCase() && line.length > 0 && /[A-Z]/.test(line)) {
+                const augmeticName = line;
+                const descriptionLines = [];
+                i++;
+                
+                // Collect description lines until next uppercase line or folder marker
+                while (i < lines.length) {
+                    const nextLine = lines[i].trim();
+                    if (nextLine.startsWith('*')) break;
+                    if (nextLine && nextLine === nextLine.toUpperCase() && /[A-Z]/.test(nextLine)) break;
+                    if (nextLine) descriptionLines.push(nextLine);
+                    i++;
+                }
+                
+                if (descriptionLines.length > 0) {
+                    const augmetic = this.parseAugmetic(augmeticName, descriptionLines, currentFolder);
+                    if (augmetic) items.push(augmetic);
+                }
+            } else {
+                i++;
+            }
+        }
+        
+        return { success: true, items: items, errors: errors };
+    }
+    
+    parseAugmetic(name, descriptionLines, folder = null) {
+        const description = this.formatDescription(descriptionLines.join('\n'));
+        const now = Date.now();
+        
+        return {
+            name: name,
+            type: "augmetic",
+            img: "modules/impmal-core/assets/icons/augmetics/augmetic.webp",
+            folder: folder,
+            system: {
+                notes: { player: description, gm: "" },
+                encumbrance: { value: 0 },
+                cost: 0,
+                availability: "",
+                quantity: 1,
+                equipped: { value: false, force: false },
+                slots: { list: [], value: 0 },
+                traits: { list: [] }
+            },
+            effects: [],
+            flags: {},
+            _id: ImperiumUtils.generateId(),
+            _stats: { createdTime: now, modifiedTime: now }
+        };
+    }
+    
+    formatDescription(text) {
+        let combined = text.replace(/\n/g, ' ').trim().replace(/\s+/g, ' ');
+        const parts = combined.split('💀').map(p => p.trim()).filter(p => p);
+        const paragraphs = [];
+        
+        parts.forEach((part, index) => {
+            if (index === 0 && !combined.startsWith('💀')) {
+                const sentences = part.split(/\.(?=\s+[A-Z])/);
+                sentences.forEach(sentence => {
+                    const trimmed = sentence.trim();
+                    if (!trimmed) return;
+                    if (!trimmed.endsWith('.')) {
+                        paragraphs.push(`<p>${trimmed}.</p>`);
+                    } else {
+                        paragraphs.push(`<p>${trimmed}</p>`);
+                    }
+                });
+            } else {
+                const trimmed = part.trim();
+                if (!trimmed) return;
+                if (!trimmed.endsWith('.')) {
+                    paragraphs.push(`<p>💀 ${trimmed}.</p>`);
+                } else {
+                    paragraphs.push(`<p>💀 ${trimmed}</p>`);
+                }
+            }
+        });
+        
+        return paragraphs.join('');
+    }
+}
+
+// ===================================================================
+// WEAPON PARSER
+// ===================================================================
+// ===================================================================
+// WEAPON PARSER (MEJORADO - con categorías y soporte completo ranged)
+// ===================================================================
+class ImperiumWeaponParser {
+    async parseInput(text) {
+        const lines = ImperiumUtils.splitLines(text);
+        const items = [];
+        const errors = [];
+        let currentFolder = null;
+        let currentWeaponType = "solid"; // Default category
+        
+        const validCategories = ['bolt', 'flame', 'las', 'launcher', 'melta', 'plasma', 'solid', 'specialised', 'grenadesExplosives', 'mundane', 'exotic'];
+        
+        lines.forEach(line => {
+            line = line.trim();
+            
+            // Category marker (ºcategory)
+            if (line.startsWith('º')) {
+                const weaponType = line.substring(1).trim().toLowerCase();
+                if (validCategories.includes(weaponType)) {
+                    currentWeaponType = weaponType;
+                    ImperiumUtils.log(`Set weapon category to: ${currentWeaponType}`);
+                } else {
+                    errors.push([line, `Invalid weapon category "${weaponType}". Valid: ${validCategories.join(', ')}`]);
+                }
+                return;
+            }
+            
+            // Folder marker (*FolderName)
+            if (line.startsWith('*')) {
+                currentFolder = line.substring(1).trim();
+                ImperiumUtils.log(`Set folder to: ${currentFolder}`);
+                return;
+            }
+            
+            const weapons = this.parseWeapon(line, currentWeaponType, currentFolder);
+            if (weapons) {
+                if (Array.isArray(weapons)) {
+                    items.push(...weapons);
+                } else {
+                    items.push(weapons);
+                }
+            } else {
+                errors.push([line, "Failed to parse weapon line"]);
+            }
+        });
+        
+        return { success: true, items: items, errors: errors };
+    }
+    
+    parseWeapon(line, weaponType = "solid", folder = null) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 6) return null;
+        
+        // Buscar el índice del DAMAGE (primer número o patrón X+CharB)
+        let damageIdx = -1;
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
+            if (/^\d+$/.test(part) || /^\d+\+\w+B$/i.test(part) || /^\d+d\d+$/.test(part)) {
+                damageIdx = i;
+                break;
+            }
+        }
+        
+        if (damageIdx === -1 || damageIdx < 2) return null;
+        
+        // SPEC es la palabra justo antes del damage
+        const specIdx = damageIdx - 1;
+        let spec = parts[specIdx].toLowerCase();
+        
+        // NAME es todo antes del spec
+        let name = parts.slice(0, specIdx).join(' ');
+        
+        // Verificar specs de dos palabras
+        const twoWordSpecs = ['long gun', 'las gun', 'melta gun', 'plasma gun', 'stub gun'];
+        if (specIdx > 0) {
+            const possibleTwoWord = (parts[specIdx - 1] + ' ' + parts[specIdx]).toLowerCase();
+            if (twoWordSpecs.includes(possibleTwoWord)) {
+                spec = possibleTwoWord;
+                name = parts.slice(0, specIdx - 1).join(' ');
+            }
+        }
+        
+        if (!name) return null;
+        
+        // Normalizar spec
+        if (spec === 'one-handed') spec = 'oneHanded';
+        if (spec === 'two-handed') spec = 'twoHanded';
+        if (spec === 'long gun') spec = 'longGun';
+        if (spec === 'las gun') spec = 'lasGun';
+        if (spec === 'melta gun') spec = 'meltaGun';
+        if (spec === 'plasma gun') spec = 'plasmaGun';
+        if (spec === 'stub gun') spec = 'stubGun';
+        
+        // Determinar si es melee o ranged
+        const meleeSpecs = ['onehanded', 'twohanded', 'brawling'];
+        const isRanged = !meleeSpecs.includes(spec);
+        const attackType = isRanged ? "ranged" : "melee";
+        
+        // Parsear desde damageIdx
+        let idx = damageIdx;
+        
+        // DAMAGE
+        let damageOptions = [];
+        let damageStr = parts[idx];
+        idx++;
+        
+        // Verificar "or" para múltiples opciones
+        if (idx < parts.length && parts[idx].toLowerCase() === 'or') {
+            idx++;
+            if (idx < parts.length) {
+                const secondDamage = parts[idx];
+                damageOptions.push(damageStr);
+                damageOptions.push(secondDamage);
+                idx++;
+            }
+        } else {
+            damageOptions.push(damageStr);
+        }
+        
+        // Si hay múltiples opciones de daño, crear múltiples armas
+        if (damageOptions.length > 1) {
+            const weapons = [];
+            damageOptions.forEach(dmgOpt => {
+                const parsedDamage = this.parseDamage(dmgOpt);
+                if (parsedDamage) {
+                    const weapon = this.createWeaponObject(
+                        name, spec, parsedDamage, parts, idx, 
+                        attackType, true, weaponType, folder
+                    );
+                    if (weapon) weapons.push(weapon);
+                }
+            });
+            return weapons;
+        } else {
+            const parsedDamage = this.parseDamage(damageOptions[0]);
+            if (!parsedDamage) return null;
+            return this.createWeaponObject(
+                name, spec, parsedDamage, parts, idx, 
+                attackType, false, weaponType, folder
+            );
+        }
+    }
+    
+    parseDamage(damageStr) {
+        let damageBase = "0";
+        let damageChar = "";
+        let damageSL = false;
+        
+        const charBonusMatch = damageStr.match(/(\d+)\+(StrB|AgB|TghB|WilB|IntB|PerB|BSB|WSB|FelB)/i);
+        if (charBonusMatch) {
+            damageBase = charBonusMatch[1];
+            const bonus = charBonusMatch[2].toLowerCase();
+            const charMap = {
+                'strb': 'str', 'agb': 'ag', 'tghb': 'tgh', 'wilb': 'wil',
+                'intb': 'int', 'perb': 'per', 'bsb': 'bs', 'wsb': 'ws', 'felb': 'fel'
+            };
+            damageChar = charMap[bonus] || "";
+        } else if (damageStr.includes('d')) {
+            damageBase = damageStr;
+        } else {
+            damageBase = damageStr;
+        }
+        
+        return { base: damageBase, characteristic: damageChar, SL: damageSL };
+    }
+    
+    createWeaponObject(baseName, spec, damage, parts, startIdx, attackType, addSuffix = false, weaponType = "solid", folder = null) {
+        let idx = startIdx;
+        
+        // Lista de traits válidos
+        const validTraits = [
+            'blast', 'burst', 'close', 'defensive', 'flamer', 'heavy',
+            'ineffective', 'inflict', 'loud', 'penetrating', 'rapidfire', 'rapid fire',
+            'reach', 'reliable', 'rend', 'shield', 'spread', 'subtle',
+            'supercharge', 'thrown', 'twohanded', 'two-handed', 'unstable',
+            'twinlinked', 'twin-linked', 'parry', 'proven', 'unwieldy',
+            'bulky', 'shoddy', 'ugly', 'unreliable', 'lightweight',
+            'mastercrafted', 'ornamental', 'durable', 'melta', 'spray', 'flame'
+        ];
+        
+        let name = baseName;
+        if (addSuffix && damage.characteristic) {
+            name += ` (${damage.characteristic.toUpperCase()})`;
+        }
+        
+        let range = "";
+        let mag = 1;
+        
+        // Para armas ranged, parsear range y mag
+        if (attackType === "ranged") {
+            if (idx >= parts.length) return null;
+            range = parts[idx].toLowerCase();
+            const validRanges = ['short', 'medium', 'long', 'extreme'];
+            if (!validRanges.includes(range)) return null;
+            idx++;
+            
+            if (idx >= parts.length) return null;
+            mag = parseInt(parts[idx]) || 1;
+            idx++;
+        }
+        
+        // ENCUMBRANCE
+        if (idx >= parts.length) return null;
+        const encumbrance = parseInt(parts[idx]) || 0;
+        idx++;
+        
+        // COST (puede incluir ammoCost entre paréntesis)
+        if (idx >= parts.length) return null;
+        let costStr = parts[idx];
+        let ammoCost = 0;
+        idx++;
+        
+        // Si la siguiente palabra empieza con '(', es el ammoCost
+        if (idx < parts.length && parts[idx].startsWith('(')) {
+            costStr += parts[idx];
+            idx++;
+        }
+        
+        const costMatch = costStr.match(/^([\d,]+)(?:\((\d+(?:,\d+)?)\))?$/);
+        if (!costMatch) return null;
+        
+        const cost = parseInt(costMatch[1].replace(/,/g, '')) || 0;
+        ammoCost = costMatch[2] ? parseInt(costMatch[2].replace(/,/g, '')) : 0;
+        
+        // AVAILABILITY
+        if (idx >= parts.length) return null;
+        const availabilityKeywords = ['common', 'scarce', 'rare', 'exotic'];
+        let availability = '';
+        while (idx < parts.length) {
+            const lower = parts[idx].toLowerCase();
+            if (availabilityKeywords.includes(lower)) {
+                availability = lower;
+                idx++;
+                break;
+            }
+            idx++;
+        }
+        if (!availability) return null;
+        
+        // TRAITS - parsear solo traits válidos
+        const traitsRaw = parts.slice(idx);
+        const traitsArray = [];
+        let i = 0;
+        
+        while (i < traitsRaw.length) {
+            const word = traitsRaw[i];
+            const cleanWord = word.replace(/[(),]/g, '').toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+            
+            // Verificar si es un trait válido
+            const isValidTrait = validTraits.some(vt => vt.replace(/\s+/g, '').replace(/-/g, '') === cleanWord);
+            
+            if (!isValidTrait) {
+                break; // Ya no es un trait, parar
+            }
+            
+            let traitStr = word;
+            
+            // Si tiene paréntesis abierto pero no cerrado, continuar
+            if (word.includes('(') && !word.includes(')')) {
+                i++;
+                while (i < traitsRaw.length && !traitsRaw[i - 1].includes(')')) {
+                    traitStr += ' ' + traitsRaw[i];
+                    i++;
+                }
+            }
+            // Si la siguiente palabra es un paréntesis con valor
+            else if (i + 1 < traitsRaw.length && /^\([^)]+\)/.test(traitsRaw[i + 1])) {
+                traitStr += ' ' + traitsRaw[i + 1];
+                i++;
+            }
+            
+            // Limpiar comas al final
+            traitStr = traitStr.replace(/,$/, '');
+            traitsArray.push(traitStr);
+            i++;
+        }
+        
+        const traits = this.parseWeaponTraitsFromArray(traitsArray);
+        
+        const now = Date.now();
+        return {
+            name: name,
+            type: "weapon",
+            img: attackType === "ranged" ? 
+                "modules/impmal-core/assets/icons/weapons/ranged-weapon.webp" : 
+                "modules/impmal-core/assets/icons/weapons/melee-weapon.webp",
+            folder: folder,
+            system: {
+                notes: { player: "", gm: "" },
+                encumbrance: { value: encumbrance },
+                cost: cost,
+                availability: availability,
+                quantity: 1,
+                equipped: { value: false, force: false },
+                damage: {
+                    base: damage.base,
+                    characteristic: damage.characteristic,
+                    SL: damage.SL,
+                    ignoreAP: false
+                },
+                traits: { list: traits },
+                ammoCost: ammoCost,
+                attackType: attackType,
+                category: weaponType,
+                spec: spec,
+                range: range,
+                rangeModifier: { value: 0, override: "" },
+                mag: { "value": mag, current: 0 },
+                ammo: { id: "" },
+                mods: { list: [] },
+                slots: { list: [], value: 0 }
+            },
+            effects: [],
+            flags: {},
+            _id: ImperiumUtils.generateId(),
+            _stats: { createdTime: now, modifiedTime: now }
+        };
+    }
+    
+    parseWeaponTraitsFromArray(traitsArray) {
+        const traits = [];
+        const twoWordTraits = ['rapid fire', 'twin-linked', 'twin linked'];
+        const traitsWithValue = ['heavy', 'inflict', 'penetrating', 'rapidfire', 'rend', 'shield', 'supercharge', 'thrown'];
+        
+        let i = 0;
+        while (i < traitsArray.length) {
+            let traitStr = traitsArray[i];
+            
+            // Verificar traits de dos palabras
+            if (i + 1 < traitsArray.length) {
+                const nextPart = traitsArray[i + 1];
+                const twoWordBase = (traitStr + ' ' + nextPart.replace(/\s*\([^)]*\)/, '')).toLowerCase().trim();
+                
+                if (twoWordTraits.includes(twoWordBase)) {
+                    traitStr = traitStr + ' ' + nextPart;
+                    i++;
+                }
+            }
+            
+            const match = traitStr.match(/^(.+?)\s*\(([^)]+)\)$/);
+            
+            if (match) {
+                const key = ImperiumUtils.normalizeTraitKey(match[1]);
+                if (traitsWithValue.includes(key.toLowerCase())) {
+                    traits.push({ key: key, value: match[2] });
+                } else {
+                    traits.push({ key: key });
+                }
+            } else {
+                const cleanTrait = traitStr.replace(/[,.]$/, '').trim();
+                if (cleanTrait) {
+                    const key = ImperiumUtils.normalizeTraitKey(cleanTrait);
+                    traits.push({ key: key });
+                }
+            }
+            
+            i++;
+        }
+        
+        return traits;
+    }
+}
+class ImperiumArmourParser {
+    async parseInput(text) {
+        const lines = ImperiumUtils.splitLines(text);
+        const items = [];
+        const errors = [];
+        let currentFolder = null;
+        
+        lines.forEach(line => {
+            line = line.trim();
+            
+            if (line.startsWith('*')) {
+                currentFolder = line.substring(1).trim();
+                return;
+            }
+            
+            const armour = this.parseArmour(line, currentFolder);
+            if (armour) items.push(armour);
+        });
+        
+        return { success: true, items: items, errors: errors };
+    }
+    
+    parseArmour(line, folder = null) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 6) return null;
+        
+        // Buscar availability
+        const validAvailabilities = ['common', 'scarce', 'rare', 'exotic'];
+        let availIdx = -1;
+        for (let i = 0; i < parts.length; i++) {
+            if (validAvailabilities.includes(parts[i].toLowerCase())) {
+                availIdx = i;
+                break;
+            }
+        }
+        if (availIdx < 4) return null;
+        
+        // Cost (antes de availability)
+        const costIdx = availIdx - 1;
+        if (!/^[\d,]+$/.test(parts[costIdx])) return null;
+        const cost = parseInt(parts[costIdx].replace(/,/g, '')) || 0;
+        
+        // Encumbrance (antes de cost)
+        const encIdx = costIdx - 1;
+        let encStr = parts[encIdx];
+        if (encIdx + 1 < costIdx && /^\([\d,]+\)$/.test(parts[encIdx + 1])) {
+            encStr += parts[encIdx + 1];
+        }
+        const encNumbers = encStr.match(/\d+/g);
+        if (!encNumbers || encNumbers.length === 0) return null;
+        const encumbrance = Math.max(...encNumbers.map(n => parseInt(n)));
+        
+        // Armour (antes de encumbrance)
+        let armourIdx = encIdx - 1;
+        if (encIdx + 1 < costIdx && /^\([\d,]+\)$/.test(parts[encIdx + 1])) {
+            armourIdx = encIdx - 2;
+        }
+        let armourStr = parts[armourIdx];
+        const armourNumbers = armourStr.match(/\d+/g);
+        if (!armourNumbers || armourNumbers.length === 0) return null;
+        const armour = Math.max(...armourNumbers.map(n => parseInt(n)));
+        
+        // Locations
+        const locationMap = {
+            'head': ['head'],
+            'body': ['body'],
+            'arms': ['rightArm', 'leftArm'],
+            'rightarm': ['rightArm'],
+            'leftarm': ['leftArm'],
+            'legs': ['rightLeg', 'leftLeg'],
+            'rightleg': ['rightLeg'],
+            'leftleg': ['leftLeg'],
+            'all': ['rightLeg', 'leftLeg', 'rightArm', 'leftArm', 'body', 'head']
+        };
+        
+        let locationsIdx = -1;
+        let locationsEndIdx = -1;
+        
+        for (let i = armourIdx - 1; i >= 0; i--) {
+            const word = parts[i];
+            const subParts = word.split(',').map(p => p.trim().toLowerCase());
+            const allAreLocations = subParts.every(p => p === '' || locationMap[p]);
+            const hasAtLeastOneLocation = subParts.some(p => locationMap[p]);
+            
+            if (hasAtLeastOneLocation && allAreLocations) {
+                if (locationsIdx === -1) {
+                    locationsIdx = i;
+                    locationsEndIdx = i;
+                } else {
+                    locationsIdx = i;
+                }
+            } else {
+                if (locationsIdx !== -1) break;
+            }
+        }
+        
+        if (locationsIdx === -1) return null;
+        
+        let locationsStr = parts.slice(locationsIdx, locationsEndIdx + 1).join(' ');
+        const locationParts = locationsStr.toLowerCase().split(/[,\s]+/).filter(p => p);
+        let locationsList = [];
+        locationParts.forEach(loc => {
+            const mapped = locationMap[loc.trim()];
+            if (mapped) locationsList = locationsList.concat(mapped);
+        });
+        locationsList = [...new Set(locationsList)];
+        
+        let locationsLabel = locationsList.length === 6 ? 'All' : locationsStr;
+        
+        const name = parts.slice(0, locationsIdx).join(' ');
+        if (!name) return null;
+        
+        const availability = parts[availIdx].toLowerCase();
+        
+        // TRAITS
+        const validTraits = [
+            'blast', 'burst', 'close', 'defensive', 'flamer', 'heavy',
+            'ineffective', 'inflict', 'loud', 'penetrating', 'rapidfire',
+            'reach', 'reliable', 'rend', 'shield', 'spread', 'subtle',
+            'supercharge', 'thrown', 'twohanded', 'two-handed', 'unstable'
+        ];
+        
+        let traitsEnd = availIdx + 1;
+        let isDash = false;
+        
+        if (traitsEnd < parts.length && /^[-–—]$/.test(parts[traitsEnd])) {
+            traitsEnd++;
+            isDash = true;
+        } else {
+            while (traitsEnd < parts.length) {
+                const word = parts[traitsEnd];
+                const cleanWord = word.replace(/[(),]/g, '').toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+                
+                const isValidTrait = validTraits.includes(cleanWord);
+                const hasParenOrComma = /[(),]/.test(word);
+                
+                if (isValidTrait || hasParenOrComma) {
+                    traitsEnd++;
+                    if (word.includes('(') && !word.includes(')')) {
+                        while (traitsEnd < parts.length && !parts[traitsEnd - 1].includes(')')) {
+                            traitsEnd++;
+                        }
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+        
+        let traits = [];
+        if (!isDash) {
+            const traitsRaw = parts.slice(availIdx + 1, traitsEnd).join(' ');
+            if (traitsRaw && traitsRaw.trim()) {
+                traits = this.parseArmourTraits(traitsRaw);
+            }
+        }
+        
+        let description = '';
+        if (traitsEnd < parts.length) {
+            description = parts.slice(traitsEnd).join(' ');
+        }
+        
+        const notesHtml = description ? `<p>${description}</p>` : '';
+        
+        let category = 'other';
+        const nameLower = name.toLowerCase();
+        if (nameLower.includes('mesh')) category = 'mesh';
+        else if (nameLower.includes('flak')) category = 'flak';
+        else if (nameLower.includes('carapace')) category = 'carapace';
+        else if (nameLower.includes('power')) category = 'power';
+        else if (armour >= 10) category = 'power';
+        else if (armour >= 6) category = 'carapace';
+        else if (armour >= 4) category = 'flak';
+        else if (armour >= 2) category = 'mesh';
+        
+        const now = Date.now();
+        return {
+            name: name,
+            type: "protection",
+            img: "modules/impmal-core/assets/icons/protection/armour.webp",
+            folder: folder,
+            system: {
+                notes: { player: notesHtml, gm: "" },
+                encumbrance: { value: encumbrance },
+                cost: cost,
+                availability: availability,
+                quantity: 1,
+                equipped: { value: false, force: false },
+                traits: { list: traits },
+                category: category,
+                armour: armour,
+                locations: {
+                    list: locationsList,
+                    label: locationsLabel
+                },
+                damage: {},
+                rended: {},
+                slots: { list: [], value: 0 },
+                mods: { list: [] }
+            },
+            effects: [],
+            flags: {},
+            _id: ImperiumUtils.generateId(),
+            _stats: { createdTime: now, modifiedTime: now }
+        };
+    }
+    
+    parseArmourTraits(traitsText) {
+        const traits = [];
+        if (!traitsText || !traitsText.trim()) return traits;
+        
+        const cleanedText = traitsText.replace(/,(?!\s)/g, ', ');
+        const traitGroups = cleanedText.split(',').map(t => t.trim());
+        
+        traitGroups.forEach(group => {
+            if (!group || group === '-' || /^[-–—]$/.test(group)) return;
+            
+            const parenMatch = group.match(/^(.+?)\s*\(([^)]+)\)$/);
+            if (parenMatch) {
+                const key = parenMatch[1].trim().toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+                const value = parenMatch[2].trim();
+                traits.push({ key: key, value: value });
+                return;
+            }
+            
+            const cleanKey = group.trim().toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+            if (cleanKey && cleanKey !== '(' && cleanKey !== ')') {
+                traits.push({ key: cleanKey });
+            }
+        });
+        
+        return traits;
+    }
+}
+
+// ===================================================================
+// EXPLOSIVE PARSER
+// ===================================================================
+class ImperiumExplosiveParser {
+    async parseInput(text) {
+        const lines = ImperiumUtils.splitLines(text);
+        const items = [];
+        const errors = [];
+        let currentFolder = null;
+        
+        lines.forEach(line => {
+            line = line.trim();
+            
+            if (line.startsWith('*')) {
+                currentFolder = line.substring(1).trim();
+                return;
+            }
+            
+            const explosive = this.parseExplosive(line, currentFolder);
+            if (explosive) items.push(explosive);
+        });
+        
+        return { success: true, items: items, errors: errors };
+    }
+    
+    parseExplosive(line, folder = null) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 6) return null;
+        
+        // Buscar availability
+        const validAvailabilities = ['common', 'scarce', 'rare', 'exotic'];
+        let availIdx = -1;
+        for (let i = 0; i < parts.length; i++) {
+            if (validAvailabilities.includes(parts[i].toLowerCase())) {
+                availIdx = i;
+                break;
+            }
+        }
+        if (availIdx < 4) return null;
+        
+        // Cost
+        const costIdx = availIdx - 1;
+        if (!/^[\d,]+$/.test(parts[costIdx])) return null;
+        const cost = parseInt(parts[costIdx].replace(/,/g, '')) || 0;
+        
+        // Encumbrance
+        const encIdx = costIdx - 1;
+        if (!/^[\d,]+$/.test(parts[encIdx])) return null;
+        const encumbrance = parseInt(parts[encIdx].replace(/,/g, '')) || 0;
+        
+        // Damage (opcional)
+        let damageIdx = encIdx - 1;
+        let damageBase = '';
+        if (damageIdx >= 0) {
+            const dmgPart = parts[damageIdx];
+            if (dmgPart === '-' || dmgPart === '–' || dmgPart === '0') {
+                damageBase = '0';
+            } else if (/^\d+$/.test(dmgPart)) {
+                damageBase = dmgPart;
+            } else {
+                damageIdx = encIdx;
+            }
+        } else {
+            damageIdx = encIdx;
+        }
+        
+        // Spec
+        let specIdx = damageIdx - 1;
+        let spec = '';
+        
+        if (specIdx >= 0) {
+            const word1 = parts[specIdx].toLowerCase();
+            if (word1 === 'ordnance' && specIdx > 0 && parts[specIdx - 1].toLowerCase() === 'thrown') {
+                spec = 'thrown';
+                specIdx = specIdx - 1;
+            } else if (word1 === 'ordnance') {
+                spec = 'ordnance';
+            } else if (word1 === 'thrown') {
+                spec = 'thrown';
+            }
+        }
+        
+        if (!spec) return null;
+        
+        const name = parts.slice(0, specIdx).join(' ');
+        if (!name) return null;
+        
+        const availability = parts[availIdx].toLowerCase();
+        
+        // TRAITS
+        const commonTraits = ['blast', 'loud', 'inflict', 'haywire', 'penetrating', 'spread',
+            'unstable', 'thrown', 'flame', 'spray', 'melta', 'rapid', 'fire',
+            'heavy', 'reliable', 'unreliable', 'proven', 'rend', 'shield'];
+        
+        let traitsEnd = availIdx + 1;
+        while (traitsEnd < parts.length) {
+            const word = parts[traitsEnd];
+            const wordLower = word.toLowerCase().replace(/[()]/g, '');
+            
+            if (commonTraits.some(t => wordLower.includes(t))) {
+                traitsEnd++;
+                if (word.includes('(') && !word.includes(')')) {
+                    while (traitsEnd < parts.length && !parts[traitsEnd - 1].includes(')')) {
+                        traitsEnd++;
+                    }
+                }
+            } else if (/^\([^)]+\)$/.test(word)) {
+                traitsEnd++;
+            } else if (traitsEnd > availIdx + 1 && parts[traitsEnd - 1].includes('(') && !parts[traitsEnd - 1].includes(')')) {
+                traitsEnd++;
+            } else {
+                break;
+            }
+        }
+        
+        const traitsRaw = parts.slice(availIdx + 1, traitsEnd).join(' ');
+        const traits = this.parseWeaponTraits(traitsRaw);
+        
+        let description = '';
+        if (traitsEnd < parts.length) {
+            description = parts.slice(traitsEnd).join(' ');
+        }
+        
+        const notesHtml = description ? `<p>${description}</p>` : '';
+        
+        // Determinar range desde traits
+        let range = 'medium';
+        const thrownTrait = traits.find(t => t.key === 'thrown');
+        if (thrownTrait && thrownTrait.value) {
+            range = thrownTrait.value.toLowerCase();
+        }
+        
+        const now = Date.now();
+        return {
+            name: name,
+            type: "weapon",
+            img: "modules/impmal-core/assets/icons/weapons/ranged-weapon.webp",
+            folder: folder,
+            system: {
+                notes: { player: notesHtml, gm: "" },
+                encumbrance: { value: encumbrance },
+                cost: cost,
+                availability: availability,
+                quantity: 1,
+                equipped: { value: false, force: false },
+                damage: {
+                    base: damageBase,
+                    characteristic: "",
+                    SL: false,
+                    ignoreAP: false
+                },
+                traits: { list: traits },
+                ammoCost: null,
+                attackType: "ranged",
+                category: "grenadesExplosives",
+                spec: spec,
+                range: range,
+                rangeModifier: { value: 0, override: "" },
+                mag: { value: null, current: null },
+                ammo: { id: "" },
+                mods: { list: [] },
+                slots: { list: [], value: 0 }
+            },
+            effects: [],
+            flags: {},
+            _id: ImperiumUtils.generateId(),
+            _stats: { createdTime: now, modifiedTime: now }
+        };
+    }
+    
+    parseWeaponTraits(traitsText) {
+        const traits = [];
+        if (!traitsText || !traitsText.trim()) return traits;
+        
+        const parts = traitsText.split(/\s+/);
+        const traitsWithValue = ['heavy', 'inflict', 'penetrating', 'rapidfire', 'rend', 'shield', 'supercharge', 'thrown', 'haywire'];
+        
+        let i = 0;
+        while (i < parts.length) {
+            const part = parts[i];
+            
+            const parenMatch = part.match(/^(.+?)\(([^)]+)\)$/);
+            if (parenMatch) {
+                const key = parenMatch[1].toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+                if (traitsWithValue.includes(key)) {
+                    traits.push({ key: key, value: parenMatch[2] });
+                } else {
+                    traits.push({ key: key });
+                }
+                i++;
+            } else if (i + 1 < parts.length && /^\([^)]+\)$/.test(parts[i + 1])) {
+                const key = part.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+                const value = parts[i + 1].replace(/[()]/g, '');
+                if (traitsWithValue.includes(key)) {
+                    traits.push({ key: key, value: value });
+                } else {
+                    traits.push({ key: key });
+                }
+                i += 2;
+            } else {
+                const cleanPart = part.replace(/\.$/, '').trim().toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+                if (cleanPart && cleanPart !== '(' && cleanPart !== ')') {
+                    traits.push({ key: cleanPart });
+                }
+                i++;
+            }
+        }
+        
+        return traits;
+    }
+}
+
+// ===================================================================
+// EQUIPMENT PARSER
+// ===================================================================
+class ImperiumEquipmentParser {
+    async parseInput(text) {
+        const lines = ImperiumUtils.splitLines(text);
+        const items = [];
+        const errors = [];
+        let currentFolder = null;
+        
+        lines.forEach(line => {
+            line = line.trim();
+            
+            if (line.startsWith('*')) {
+                currentFolder = line.substring(1).trim();
+                return;
+            }
+            
+            const equipment = this.parseEquipment(line, currentFolder);
+            if (equipment) items.push(equipment);
+        });
+        
+        return { success: true, items: items, errors: errors };
+    }
+    
+    parseEquipment(line, folder = null) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 4) return null;
+        
+        // Buscar el índice del COST (primer número)
+        let costIdx = -1;
+        for (let i = 0; i < parts.length; i++) {
+            if (/^[\d,]+$/.test(parts[i])) {
+                costIdx = i;
+                break;
+            }
+        }
+        
+        if (costIdx === -1 || costIdx < 1) return null;
+        
+        // NAME es todo antes del cost
+        const name = parts.slice(0, costIdx).join(' ');
+        
+        // COST
+        const cost = parseInt(parts[costIdx].replace(/,/g, '')) || 0;
+        
+        // AVAILABILITY
+        if (costIdx + 1 >= parts.length) return null;
+        const availability = parts[costIdx + 1].toLowerCase();
+        const validAvailabilities = ['common', 'scarce', 'rare', 'exotic'];
+        if (!validAvailabilities.includes(availability)) return null;
+        
+        // ENCUMBRANCE
+        if (costIdx + 2 >= parts.length) return null;
+        const encumbrance = parseInt(parts[costIdx + 2]) || 0;
+        
+        // DESCRIPTION (opcional)
+        let description = '';
+        if (costIdx + 3 < parts.length) {
+            description = parts.slice(costIdx + 3).join(' ');
+        }
+        
+        const notesHtml = description ? `<p>${description}</p>` : '';
+        
+        const now = Date.now();
+        return {
+            name: name,
+            type: "equipment",
+            img: "modules/impmal-core/assets/icons/equipment/equipment.webp",
+            folder: folder,
+            system: {
+                notes: {
+                    player: notesHtml,
+                    gm: ""
+                },
+                equipped: {
+                    value: false,
+                    force: false
+                },
+                encumbrance: {
+                    value: encumbrance
+                },
+                cost: cost,
+                availability: availability,
+                quantity: 1,
+                uses: {
+                    value: null,
+                    max: null,
+                    enabled: false
+                },
+                test: {
+                    difficulty: "challenging",
+                    characteristic: "",
+                    skill: {
+                        key: "",
+                        specialisation: ""
+                    },
+                    self: false
+                },
+                traits: {
+                    list: []
+                },
+                slots: {
+                    list: [],
+                    value: 0
+                }
+            },
+            effects: [],
+            flags: {},
+            _id: ImperiumUtils.generateId(),
+            _stats: { createdTime: now, modifiedTime: now }
+        };
+    }
+}
 
 // ===================================================================
 // PROGRAMA PRINCIPAL
@@ -1638,13 +2671,18 @@ class ImperiumProgram {
                 <label>Content Type:</label>
                 <select id="content-type" style="width: 100%; padding: 5px; margin-bottom: 10px;">
                     <option value="npc">NPCs / Creatures</option>
+                    <option value="vehicle">Vehicles</option>
                     <option value="power">Psychic Powers</option>
                     <option value="talent">Talents</option>
                     <option value="boon">Boons & Liabilities</option>
-                    <option value="vehicle">Vehicles</option>
+                    <option value="augmetic">Augmetics</option>
+                    <option value="weapon">Weapons</option>
+                    <option value="armour">Armour</option>
+                    <option value="explosive">Explosives</option>
+                    <option value="equipment">Equipment</option>
                 </select>
             </div>
-            <div class="form-group" id="autocalc-settings">
+            <div class="form-group" id="autocalc-settings" style="display: none;">
                 <label>AutoCalc Settings:</label>
                 <div style="margin-bottom: 10px;">
                     <label style="margin-right: 15px;">
@@ -1673,31 +2711,47 @@ class ImperiumProgram {
             
             const placeholders = {
                 npc: "Chaos Beastman\\nMedium Beastman (Heretic), Troop\\nWS  BS  Str Tgh Ag  Int Per Wil Fel\\n40  30  40  40  30  20  30  30  10\\nArmour Wounds Critical Wounds\\n3 15 3\\nInitiative Speed Resolve\\n6 Normal 4\\nSkills: Athletics 45, Awareness 35\\nTRAITS\\nBestial: The creature is an animal.\\nATTACKS\\nHorns: Melee (Brawling) 5 + SL Damage\\nPossessions: Crude armor\\nNOTES\\nChaos Beastmen are twisted creatures...",
+                vehicle: "CARGO HAULER\\nVehicle, Wheeled\\nArmour Speed Crew\\n10/6 Slow 1\\nPassengers Size\\n3 Large\\nTRAITS\\nRugged: This vehicle ignores difficult terrain\\nWEAPONS\\nStubber (Crew): Ranged (Projectile) 5 Damage Short Range. Loud\\nNOTES\\nA sturdy cargo vehicle...",
                 power: "*Pyromancy Powers\\nºpyromancy\\n\\nPLASMA TORCH\\nCognomens: The Searing Touch\\nWarp Rating: 2\\nDifficulty: Challenging (+0)\\nRange: Self\\nTarget: Self\\nDuration: Sustained\\nYour hand becomes wreathed...",
-                talent: "TENACIOUS\\nIt's tough to keep you down. Whenever you suffer\\nthe Stunned Condition, you may immediately\\nmake a Challenging (+0) Fortitude (Endurance)\\nTest to recover from the Condition.",
+                talent: "*Combat Talents\\nTENACIOUS\\nIt's tough to keep you down. Whenever you suffer\\nthe Stunned Condition, you may immediately\\nmake a Challenging (+0) Fortitude (Endurance)\\nTest to recover from the Condition.",
                 boon: "ºboon\\nAMELIORATOR\\nYour Patron is obsessed with improving both\\nyour weapons and your bodies...\\n\\nºliability\\nPARANOID\\nYour Patron trusts no one...",
-                vehicle: "CARGO HAULER\\nVehicle, Wheeled\\nArmour Speed Crew\\n10/6 Slow 1\\nPassengers Size\\n3 Large\\nTRAITS\\n...\\nWEAPONS\\nStubber (Crew): Ranged (Projectile) 5 Damage Short Range...\\nNOTES\\nA sturdy cargo vehicle..."
+                augmetic: "*Augmetics\\nAUGMETIC ARM\\nAmong the more common augmetic parts in the\\nImperium, these limbs can be seen everywhere from\\nbattlefields to manufactorums...",
+                weapon: "*Melee Weapons\\nBlink-Blade One-handed 3+StrB 1 8,000 Exotic Penetrating (2)",
+                armour: "*Armour\\nEnforcer Carapace All 5 4 1,800 Rare Heavy (4), Loud Details about armour",
+                explosive: "*Explosives\\nFrag Grenade Thrown Ordnance 5 1 60 Common Blast (3)",
+                equipment: "*Tools\\nAccordion Wire 200 Common 2 A staple of trench warfare...\\nAlmanac Astrae Divinitus 8000 Rare 1"
             };
             
             const hints = {
-                npc: "Name detection is automatic. Separate creatures with blank lines.",
-                power: "Use *FolderName for folders | Use ºdiscipline to set power type (pyromancy, minor, biomancy, divination, telekinesis, telepathy, waaagh, or leave empty) | Add * to power name for Overt powers",
-                talent: "Use *FolderName for folders | Talents detected by UPPERCASE name lines",
-                boon: "Use *FolderName for folders | Use ºcategory to set type (boon, liability) | Default: boon",
-                vehicle: "Use *FolderName for folders | Vehicles detected by 'Vehicle, Type' line"
+                npc: "Format: Name detection is automatic. Separate creatures with blank lines.",
+                vehicle: "Format: Use *FolderName for folders | Vehicles detected by 'Vehicle, Type' line",
+                power: "Format: Use *FolderName for folders | Use ºdiscipline to set power type (pyromancy, minor, biomancy, divination, telekinesis, telepathy, waaagh, or leave empty) | Add * to power name for Overt powers",
+                talent: "Format: Use *FolderName for folders | Talents detected by UPPERCASE name lines",
+                boon: "Format: Use *FolderName for folders | Use ºcategory to set type (boon, liability) | Default: boon",
+                augmetic: "Format: Use *FolderName for folders | Augmetics detected by UPPERCASE name lines | 💀 emoji creates bullet points",
+                weapon: "Format: Use *FolderName for folders | Line format: Name Spec Damage Encumbrance Cost Availability Traits",
+                armour: "Format: Use *FolderName for folders | Line format: Name Locations Armour Enc Cost Availability [Traits] [Description]",
+                explosive: "Format: Use *FolderName for folders | Line format: Name Spec Damage Enc Cost Availability [Traits] [Description]",
+                equipment: "Format: Use *FolderName for folders | Line format: Name Cost Availability Encumbrance [Optional Description]"
             };
             
             const labels = {
                 npc: "NPCs / Creatures:",
+                vehicle: "Vehicles:",
                 power: "Psychic Powers:",
                 talent: "Talents:",
                 boon: "Boons & Liabilities:",
-                vehicle: "Vehicles:"
+                augmetic: "Augmetics:",
+                weapon: "Weapons:",
+                armour: "Armour:",
+                explosive: "Explosives:",
+                equipment: "Equipment:"
             };
             
             contentType.addEventListener('change', function() {
                 const type = this.value;
-                autoCalcSettings.style.display = type === 'npc' ? 'block' : 'none';
+                // AutoCalc solo para NPCs y Vehicles (ambos son Actors con wounds/initiative)
+                autoCalcSettings.style.display = (type === 'npc' || type === 'vehicle') ? 'block' : 'none';
                 inputLabel.textContent = labels[type];
                 textarea.placeholder = placeholders[type];
                 formatHint.textContent = hints[type];
@@ -1762,6 +2816,31 @@ class ImperiumProgram {
             parseResult = await parser.parseInput(result.text.trim());
             entityType = Actor;
             entityLabel = "Vehicle";
+        } else if (result.contentType === 'augmetic') {
+            parser = new ImperiumAugmeticParser();
+            parseResult = await parser.parseInput(result.text.trim());
+            entityType = Item;
+            entityLabel = "Augmetic";
+        } else if (result.contentType === 'weapon') {
+            parser = new ImperiumWeaponParser();
+            parseResult = await parser.parseInput(result.text.trim());
+            entityType = Item;
+            entityLabel = "Weapon";
+        } else if (result.contentType === 'armour') {
+            parser = new ImperiumArmourParser();
+            parseResult = await parser.parseInput(result.text.trim());
+            entityType = Item;
+            entityLabel = "Armour";
+        } else if (result.contentType === 'explosive') {
+            parser = new ImperiumExplosiveParser();
+            parseResult = await parser.parseInput(result.text.trim());
+            entityType = Item;
+            entityLabel = "Explosive";
+        } else if (result.contentType === 'equipment') {
+            parser = new ImperiumEquipmentParser();
+            parseResult = await parser.parseInput(result.text.trim());
+            entityType = Item;
+            entityLabel = "Equipment";
         } else {
             ui.notifications.error("Unknown content type");
             return;
@@ -1782,11 +2861,70 @@ class ImperiumProgram {
 
         const items = (result.contentType === 'npc' || result.contentType === 'vehicle') ? parseResult.creatures || parseResult.items : parseResult.items;
 
+        // Sistema de carpetas: crear un mapa de carpetas
+        const folderMap = new Map(); // folderName -> folderId
+        
+        // Recolectar todas las carpetas únicas mencionadas en los items
+        for (const itemData of items) {
+            if (itemData.folder && typeof itemData.folder === 'string') {
+                const folderName = itemData.folder;
+                if (!folderMap.has(folderName)) {
+                    folderMap.set(folderName, null); // Marcar para buscar/crear
+                }
+            }
+        }
+        
+        // Crear o buscar todas las carpetas necesarias
+        for (const [folderName, existingId] of folderMap.entries()) {
+            if (existingId) continue; // Ya tiene ID
+            
+            try {
+                // Determinar el tipo de carpeta basado en entityType
+                const folderType = entityType.name; // "Actor" o "Item"
+                
+                // Buscar si la carpeta ya existe
+                let existingFolder = game.folders.find(f => 
+                    f.name === folderName && f.type === folderType
+                );
+                
+                if (existingFolder) {
+                    folderMap.set(folderName, existingFolder.id);
+                    ImperiumUtils.log(`Using existing folder: ${folderName} (${existingFolder.id})`);
+                } else {
+                    // Crear nueva carpeta
+                    const newFolder = await Folder.create({
+                        name: folderName,
+                        type: folderType,
+                        folder: folderId || null, // Parent folder si el usuario hizo click derecho
+                        color: "#" + Math.floor(Math.random()*16777215).toString(16)
+                    });
+                    
+                    if (newFolder) {
+                        folderMap.set(folderName, newFolder.id);
+                        ImperiumUtils.log(`Created folder: ${folderName} (${newFolder.id})`);
+                        ui.notifications.info(`Folder created: ${folderName}`);
+                    }
+                }
+            } catch (error) {
+                ImperiumUtils.log(`Error with folder ${folderName}: ${error.message}`);
+                ui.notifications.warn(`Could not create folder: ${folderName}`);
+            }
+        }
+        
+        // Ahora crear los items con los folderIds correctos
         for (const itemData of items) {
             try {
                 ImperiumUtils.log(`Creating ${entityLabel}: ${itemData.name}`);
                 
-                if (folderId) {
+                // Convertir nombre de carpeta a ID si es necesario
+                if (itemData.folder && typeof itemData.folder === 'string') {
+                    const folderName = itemData.folder;
+                    const actualFolderId = folderMap.get(folderName);
+                    itemData.folder = actualFolderId || null;
+                }
+                
+                // Si no tiene carpeta pero el usuario hizo click derecho en una, usar esa
+                if (!itemData.folder && folderId) {
                     itemData.folder = folderId;
                 }
 
